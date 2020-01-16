@@ -52,7 +52,7 @@ test-suite fixed9-tests
     base                       >= 4.8  && < 4.13,
     fixed9,
     HUnit                      >= 1.3  && < 1.7,
-    QuickCheck                 >= 2.8  && < 2.13
+    QuickCheck                 >= 2.8  && < 2.14
 
   c-sources: cbits/fixed9.c
   include-dirs: include
