@@ -3,22 +3,17 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UnboxedTuples #-}
 
-module Data.Fixed9
-  ( Fixed9(..)
-  , e9ToFixed9
-  , dblToFixed9
-  , truncateTo
-  ) where
+module Data.Fixed9 (Fixed9(..), e9ToFixed9, dblToFixed9Unsafe, truncateTo, fixed9ToDbl) where
 
 import Control.DeepSeq (NFData(..))
 import Control.Monad (liftM)
 
-import Data.Fixed (Fixed(..), E9)
+import Data.Fixed (E9, Fixed(..))
 import Data.Hashable (Hashable(..))
 import Data.Int (Int64)
 import Data.Primitive.Types (Prim(..))
-import Data.Ratio (Ratio, numerator, denominator)
-import Data.Vector.Unboxed (MVector, Vector, Unbox)
+import Data.Ratio (denominator, numerator)
+import Data.Vector.Unboxed (MVector, Unbox, Vector)
 
 import GHC.Real ((%), divZeroError, overflowError)
 
@@ -27,9 +22,9 @@ import Numeric (showFFloat)
 import TextShow (TextShow(..))
 import TextShow.Data.Floating (showbFFloat)
 
-import qualified Data.Vector.Primitive as VP
 import qualified Data.Vector.Generic as VG
 import qualified Data.Vector.Generic.Mutable as VGM
+import qualified Data.Vector.Primitive as VP
 
 import qualified Data.C_API as CAPI
 
@@ -47,24 +42,22 @@ instance Bounded Fixed9 where
   maxBound = Fixed9 maxBound
 
 instance Enum Fixed9 where
-  toEnum = Fixed9 . fromInteger .toEnum
-  fromEnum =  fromEnum . unwrapFixed9
+  toEnum   = Fixed9 . fromInteger . toEnum
+  fromEnum = fromEnum . unwrapFixed9
 
 instance Real Fixed9 where
   toRational (Fixed9 x) = fromIntegral x % 1000000000
 
 instance Fractional Fixed9 where
   (/) (Fixed9 a) (Fixed9 b)
-    | b == 0 = divZeroError
+    | b == 0    = divZeroError
     | otherwise = Fixed9 (CAPI.fixed9Divide a b)
   -- FIXME: Bounds check
-  fromRational r = Fixed9 . fromInteger $
-    (numerator r * 1000000000) `quot` denominator r
+  fromRational r = Fixed9 . fromInteger $ (numerator r * 1000000000) `quot` denominator r
 
 instance RealFrac Fixed9 where
-  properFraction a =
-    case truncate (toRational a) of
-      x -> (x, a - fromIntegral x)
+  properFraction a = case truncate (toRational a) of
+    x -> (x, a - fromIntegral x)
   truncate f = truncate (toRational f)
   round f = round (toRational f)
   ceiling f = ceiling (toRational f)
@@ -74,42 +67,71 @@ instance Num Fixed9 where
   (Fixed9 a) + (Fixed9 b) = Fixed9 (a + b)
   (Fixed9 a) * (Fixed9 b) = Fixed9 (CAPI.fixed9Multiply a b)
   (Fixed9 a) - (Fixed9 b) = Fixed9 (a - b)
-  abs = Fixed9 . abs . unwrapFixed9
-  signum = Fixed9 . signum . unwrapFixed9
+  abs         = Fixed9 . abs . unwrapFixed9
+  signum      = Fixed9 . signum . unwrapFixed9
   fromInteger = Fixed9 . (*) magnitude . fromInteger
 
 instance Integral Fixed9 where
   quot (Fixed9 a) (Fixed9 b)
-    | b == 0 = divZeroError
+    | b == 0                     = divZeroError
     | b == (-1) && a == minBound = overflowError
-    | otherwise = Fixed9 ((CAPI.fixed9Divide a b `quot` magnitude) * magnitude)
+    | otherwise                  = Fixed9 ((CAPI.fixed9Divide a b `quot` magnitude) * magnitude)
   rem (Fixed9 a) (Fixed9 b)
-    | b == 0 = divZeroError
+    | b == 0    = divZeroError
     | b == (-1) = 0
+    |
     -- NOT ideal implementation, but it will do for now
-    | otherwise = Fixed9 (((a `quot` magnitude) `rem` (b `quot` magnitude)) * magnitude)
+      otherwise = Fixed9 (((a `quot` magnitude) `rem` (b `quot` magnitude)) * magnitude)
   div (Fixed9 a) (Fixed9 b)
-    | b == 0 = divZeroError
+    | b == 0                     = divZeroError
     | b == (-1) && a == minBound = overflowError
-    | otherwise = Fixed9 ((CAPI.fixed9Divide a b `div` magnitude) * magnitude)
+    | otherwise                  = Fixed9 ((CAPI.fixed9Divide a b `div` magnitude) * magnitude)
   mod (Fixed9 a) (Fixed9 b)
-    | b == 0 = divZeroError
+    | b == 0    = divZeroError
     | b == (-1) = 0
+    |
     -- NOT ideal implementation, but it will do for now
-    | otherwise = Fixed9 (((a `div` magnitude) `mod` (b `div` magnitude)) * magnitude)
+      otherwise = Fixed9 (((a `div` magnitude) `mod` (b `div` magnitude)) * magnitude)
   quotRem (Fixed9 a) (Fixed9 b)
-    | b == 0 = divZeroError
-    | b == (-1) && a == minBound = (overflowError, 0)
-    | otherwise = ( Fixed9 ((CAPI.fixed9Divide a b `quot` magnitude) * magnitude)
-                  , Fixed9 (((a `quot` magnitude) `rem` (b `quot` magnitude)) * magnitude)
-                  )
+    | b == 0
+    = divZeroError
+    | b == (-1) && a == minBound
+    = (overflowError, 0)
+    | otherwise
+    = ( Fixed9 ((CAPI.fixed9Divide a b `quot` magnitude) * magnitude)
+      , Fixed9 (((a `quot` magnitude) `rem` (b `quot` magnitude)) * magnitude)
+      )
   divMod (Fixed9 a) (Fixed9 b)
-    | b == 0 = divZeroError
-    | b == (-1) && a == minBound = (overflowError, 0)
-    | otherwise = ( Fixed9 ((CAPI.fixed9Divide a b `div` magnitude) * magnitude)
-                  , Fixed9 (((a `div` magnitude) `mod` (b `div` magnitude)) * magnitude)
-                  )
+    | b == 0
+    = divZeroError
+    | b == (-1) && a == minBound
+    = (overflowError, 0)
+    | otherwise
+    = ( Fixed9 ((CAPI.fixed9Divide a b `div` magnitude) * magnitude)
+      , Fixed9 (((a `div` magnitude) `mod` (b `div` magnitude)) * magnitude)
+      )
   toInteger (Fixed9 a) = toInteger (a `quot` magnitude)
+
+-- TODO: native implementations of exp/log/sqrt for Fixed9?
+instance Floating Fixed9 where
+  pi   = dblToFixed9Unsafe pi
+  exp  = dblToFixed9Unsafe . exp . fixed9ToDbl
+  log  = dblToFixed9Unsafe . log . fixed9ToDbl
+  sqrt = dblToFixed9Unsafe . sqrt . fixed9ToDbl
+  (**) a b = dblToFixed9Unsafe $ fixed9ToDbl a ** fixed9ToDbl b
+  logBase a b = dblToFixed9Unsafe $ logBase (fixed9ToDbl a) (fixed9ToDbl b)
+  sin   = dblToFixed9Unsafe . sin . fixed9ToDbl
+  cos   = dblToFixed9Unsafe . cos . fixed9ToDbl
+  tan   = dblToFixed9Unsafe . tan . fixed9ToDbl
+  asin  = dblToFixed9Unsafe . asin . fixed9ToDbl
+  acos  = dblToFixed9Unsafe . acos . fixed9ToDbl
+  atan  = dblToFixed9Unsafe . atan . fixed9ToDbl
+  sinh  = dblToFixed9Unsafe . sinh . fixed9ToDbl
+  cosh  = dblToFixed9Unsafe . cosh . fixed9ToDbl
+  tanh  = dblToFixed9Unsafe . tanh . fixed9ToDbl
+  asinh = dblToFixed9Unsafe . asinh . fixed9ToDbl
+  acosh = dblToFixed9Unsafe . acosh . fixed9ToDbl
+  atanh = dblToFixed9Unsafe . atanh . fixed9ToDbl
 
 instance Hashable Fixed9 where
   hashWithSalt s (Fixed9 i) = hashWithSalt s i
@@ -118,10 +140,9 @@ instance Hashable Fixed9 where
 truncateTo :: Fixed9 -> Int64 -> Fixed9
 truncateTo a@(Fixed9 x) i
   | i > 0 && i < 9 = Fixed9 ((x `quot` prec) * prec)
-  | i == 0 = floor a
-  | otherwise = a
-  where
-    prec = i * 10
+  | i == 0         = floor a
+  | otherwise      = a
+  where prec = i * 10
 
 instance Show Fixed9 where
   show v = showFFloat Nothing (realToFrac v :: Double) ""
@@ -131,15 +152,14 @@ instance TextShow Fixed9 where
 
 instance Prim Fixed9 where
   {-# INLINE sizeOf# #-}
-  sizeOf# (Fixed9 a)= sizeOf# a
+  sizeOf# (Fixed9 a) = sizeOf# a
   {-# INLINE alignment# #-}
-  alignment# (Fixed9 a)= alignment# a
+  alignment# (Fixed9 a) = alignment# a
   {-# INLINE indexByteArray# #-}
   indexByteArray# b i = Fixed9 (indexByteArray# b i)
   {-# INLINE readByteArray# #-}
-  readByteArray# mba i st =
-   case readByteArray# mba i st of
-     (# s, a #) -> (# s, Fixed9 a #)
+  readByteArray# mba i st = case readByteArray# mba i st of
+    (# s, a #) -> (# s, Fixed9 a #)
   {-# INLINE writeByteArray# #-}
   writeByteArray# mba i (Fixed9 a) = writeByteArray# mba i a
   {-# INLINE setByteArray# #-}
@@ -147,9 +167,8 @@ instance Prim Fixed9 where
   {-# INLINE indexOffAddr# #-}
   indexOffAddr# addr i = Fixed9 (indexOffAddr# addr i)
   {-# INLINE readOffAddr# #-}
-  readOffAddr# addr i st =
-   case readOffAddr# addr i st of
-     (# s, a #) -> (# s, Fixed9 a #)
+  readOffAddr# addr i st = case readOffAddr# addr i st of
+    (# s, a #) -> (# s, Fixed9 a #)
   {-# INLINE writeOffAddr# #-}
   writeOffAddr# addr i (Fixed9 a) = writeOffAddr# addr i a
   {-# INLINE setOffAddr# #-}
@@ -204,9 +223,14 @@ instance VG.Vector Vector Fixed9 where
 
 instance Unbox Fixed9 where
 
--- FIXME: Bounds check
-dblToFixed9 :: Double -> Fixed9
-dblToFixed9 x = Fixed9 (round $ x * 1000000000)
+fixed9ToDbl :: Fixed9 -> Double
+{-# INLINE fixed9ToDbl #-}
+fixed9ToDbl = flip (/) 1000000000 . realToFrac . unwrapFixed9
+
+-- ^ Performs a double to fixed 9 conversion without bounds checking
+dblToFixed9Unsafe :: Double -> Fixed9
+{-# INLINE dblToFixed9Unsafe #-}
+dblToFixed9Unsafe = Fixed9 . round . (*) 1000000000
 
 e9ToFixed9 :: Fixed E9 -> Fixed9
 e9ToFixed9 (MkFixed x) = Fixed9 (fromIntegral x)
